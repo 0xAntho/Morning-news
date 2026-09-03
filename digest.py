@@ -1,5 +1,6 @@
 import os
 import json
+import html
 from datetime import datetime
 from urllib.parse import quote
 
@@ -50,27 +51,35 @@ def get_news(query, count=2):
 
 
 def format_message(holdings):
-    lines = [f"*Recap matinal - {datetime.now().strftime('%d/%m/%Y')}*", ""]
+    # Using HTML parse mode: escape any dynamic text (names, headlines) since
+    # they can contain characters like & < > that break Telegram's parser,
+    # and news headlines especially can't be trusted to be "safe" text.
+    lines = [f"<b>Recap matinal - {datetime.now().strftime('%d/%m/%Y')}</b>", ""]
 
     for h in holdings:
         ticker = h["ticker"]
         name = h.get("name", ticker)
+        safe_name = html.escape(name)
 
         result = get_price_change(ticker)
         if result:
             price, pct = result
             emoji = "🟢" if pct >= 0 else "🔴"
-            lines.append(f"{emoji} *{name}* ({ticker}): {price:.2f} ({pct:+.2f}%)")
+            lines.append(f"{emoji} <b>{safe_name}</b> ({ticker}): {price:.2f} ({pct:+.2f}%)")
         else:
-            lines.append(f"⚪ *{name}* ({ticker}): donnees indisponibles")
+            lines.append(f"⚪ <b>{safe_name}</b> ({ticker}): donnees indisponibles")
 
         for n in get_news(f"{name} action", NEWS_PER_TICKER):
-            lines.append(f"   📰 [{n['title']}]({n['link']})")
+            safe_title = html.escape(n["title"])
+            safe_link = html.escape(n["link"], quote=True)
+            lines.append(f'   📰 <a href="{safe_link}">{safe_title}</a>')
         lines.append("")
 
-    lines.append("*Actualites des marches*")
+    lines.append("<b>Actualites des marches</b>")
     for n in get_news(GLOBAL_NEWS_QUERY, GLOBAL_NEWS_COUNT):
-        lines.append(f"📰 [{n['title']}]({n['link']})")
+        safe_title = html.escape(n["title"])
+        safe_link = html.escape(n["link"], quote=True)
+        lines.append(f'📰 <a href="{safe_link}">{safe_title}</a>')
 
     return "\n".join(lines)
 
@@ -83,11 +92,17 @@ def send_telegram_message(text):
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
     resp = requests.post(url, json=payload, timeout=15)
-    resp.raise_for_status()
+    if not resp.ok:
+        # Raise with Telegram's actual error body baked into the message,
+        # so it's guaranteed to show up in the traceback (unlike a separate
+        # print(), which can get lost to stdout buffering in some containers).
+        raise RuntimeError(
+            f"Telegram API error {resp.status_code}: {resp.text}"
+        )
     return resp.json()
 
 
