@@ -2,6 +2,8 @@ import os
 import json
 import html
 import time
+import calendar
+import re
 from datetime import datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -15,6 +17,7 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 SEND_TIME = os.environ.get("SEND_TIME", "07:30")
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Paris")
+NEWS_MAX_AGE_HOURS = float(os.environ.get("NEWS_MAX_AGE_HOURS", "24"))
 
 HOLDINGS_FILE = "holdings.json"
 NEWS_PER_TICKER = 2
@@ -44,15 +47,67 @@ def get_price_change(ticker):
         return None
 
 
+def _normalize_title(title):
+    """Lowercase, strip punctuation/whitespace, for dedup comparison."""
+    return re.sub(r"[^\w]+", "", title.lower())
+
+
 def get_news(query, count=2):
-    """Free Google News RSS search, no API key required."""
+    """Free Google News RSS search, no API key required.
+
+    Google News sorts by relevance, not date, which surfaces stale or
+    evergreen articles alongside today's news (sometimes the same story
+    twice via different outlets). To keep results relevant we: drop
+    anything older than NEWS_MAX_AGE_HOURS, sort freshest first, split the
+    "Headline - Publisher" title Google returns, and dedup near-identical
+    headlines before truncating to `count`.
+    """
     try:
         rss_url = f"https://news.google.com/rss/search?q={quote(query)}&hl=fr&gl=FR&ceid=FR:fr"
         feed = feedparser.parse(rss_url)
-        return [{"title": e.title, "link": e.link} for e in feed.entries[:count]]
+
+        now = time.time()
+        max_age = NEWS_MAX_AGE_HOURS * 3600
+        fresh = []
+        for e in feed.entries:
+            published = getattr(e, "published_parsed", None)
+            if not published:
+                continue
+            age = now - calendar.timegm(published)
+            if 0 <= age <= max_age:
+                fresh.append((age, e))
+        fresh.sort(key=lambda pair: pair[0])
+
+        seen = set()
+        results = []
+        for _, e in fresh:
+            title = e.title
+            source = e.source.get("title") if hasattr(e, "source") else None
+            if source and title.endswith(f" - {source}"):
+                title = title[: -len(f" - {source}")]
+
+            key = _normalize_title(title)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            results.append({"title": title, "link": e.link, "source": source})
+            if len(results) >= count:
+                break
+
+        return results
     except Exception as e:
         print(f"[warn] news fetch failed for '{query}': {e}")
         return []
+
+
+def _format_news_line(n):
+    safe_title = html.escape(n["title"])
+    safe_link = html.escape(n["link"], quote=True)
+    line = f'📰 <a href="{safe_link}">{safe_title}</a>'
+    if n["source"]:
+        line += f' — <i>{html.escape(n["source"])}</i>'
+    return line
 
 
 def format_message(holdings):
@@ -74,17 +129,16 @@ def format_message(holdings):
         else:
             lines.append(f"⚪ <b>{safe_name}</b> ({ticker}): donnees indisponibles")
 
-        for n in get_news(f"{name} action", NEWS_PER_TICKER):
-            safe_title = html.escape(n["title"])
-            safe_link = html.escape(n["link"], quote=True)
-            lines.append(f'   📰 <a href="{safe_link}">{safe_title}</a>')
+        ticker_news = get_news(f"{name} action", NEWS_PER_TICKER)
+        if not ticker_news:
+            lines.append("   ℹ️ pas d'actualite recente")
+        for n in ticker_news:
+            lines.append(f"   {_format_news_line(n)}")
         lines.append("")
 
     lines.append("<b>Actualites des marches</b>")
     for n in get_news(GLOBAL_NEWS_QUERY, GLOBAL_NEWS_COUNT):
-        safe_title = html.escape(n["title"])
-        safe_link = html.escape(n["link"], quote=True)
-        lines.append(f'📰 <a href="{safe_link}">{safe_title}</a>')
+        lines.append(_format_news_line(n))
 
     return "\n".join(lines)
 
