@@ -85,25 +85,39 @@ def format_message(holdings):
 
 
 def send_telegram_message(text):
-    if len(text) > TELEGRAM_MAX_LEN:
-        text = text[:TELEGRAM_MAX_LEN] + "\n\n...(message tronque)"
-
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    resp = requests.post(url, json=payload, timeout=15)
-    if not resp.ok:
-        # Raise with Telegram's actual error body baked into the message,
-        # so it's guaranteed to show up in the traceback (unlike a separate
-        # print(), which can get lost to stdout buffering in some containers).
-        raise RuntimeError(
-            f"Telegram API error {resp.status_code}: {resp.text}"
-        )
-    return resp.json()
+    lines = text.splitlines(keepends=True)
+    chunks = []
+    current = ""
+
+    for line in lines:
+        if current and len(current) + len(line) > TELEGRAM_MAX_LEN:
+            chunks.append(current.rstrip("\n"))
+            current = ""
+        current += line
+
+    if current:
+        chunks.append(current.rstrip("\n"))
+
+    responses = []
+    for chunk in chunks:
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        resp = requests.post(url, json=payload, timeout=15)
+        if not resp.ok:
+            # Raise with Telegram's actual error body baked into the message,
+            # so it's guaranteed to show up in the traceback (unlike a separate
+            # print(), which can get lost to stdout buffering in some containers).
+            raise RuntimeError(
+                f"Telegram API error {resp.status_code}: {resp.text}"
+            )
+        responses.append(resp.json())
+
+    return responses
 
 
 def main():
