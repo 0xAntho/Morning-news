@@ -6,5 +6,21 @@
   {
     "ticker": "MC.PA",
     "name": "LVMH"
+  },
+  {
+    "ticker": "FDJU.PA",
+    "name": "FDJ United"
+  },
+  {
+    "ticker": "ASML.AS",
+    "name": "ASML Holding"
+  },
+  {
+    "ticker": "DG.PA",
+    "name": "Vinci"
+  },
+  {
+    "ticker": "SGO.PA",
+    "name": "Saint-Gobain"
   }
 ]
