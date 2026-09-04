@@ -1,8 +1,10 @@
 import os
 import json
 import html
+import time
 from datetime import datetime
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import requests
 import feedparser
@@ -10,6 +12,9 @@ import yfinance as yf
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+SEND_TIME = os.environ.get("SEND_TIME", "07:30")
+TIMEZONE = os.environ.get("TIMEZONE", "Europe/Paris")
 
 HOLDINGS_FILE = "holdings.json"
 NEWS_PER_TICKER = 2
@@ -120,7 +125,7 @@ def send_telegram_message(text):
     return responses
 
 
-def main():
+def send_digest():
     holdings = load_holdings()
     if not holdings:
         print("[warn] holdings.json is empty, nothing to send")
@@ -128,6 +133,27 @@ def main():
     message = format_message(holdings)
     send_telegram_message(message)
     print("Digest sent successfully!")
+
+
+def main():
+    tz = ZoneInfo(TIMEZONE)
+    target_hour, target_minute = (int(p) for p in SEND_TIME.split(":"))
+    print(f"[info] scheduler started, will send daily at {SEND_TIME} ({TIMEZONE})")
+
+    last_sent_date = None
+    while True:
+        now = datetime.now(tz)
+        if (
+            now.hour == target_hour
+            and now.minute == target_minute
+            and now.date() != last_sent_date
+        ):
+            try:
+                send_digest()
+            except Exception as e:
+                print(f"[error] failed to send digest: {e}")
+            last_sent_date = now.date()
+        time.sleep(30)
 
 
 if __name__ == "__main__":
