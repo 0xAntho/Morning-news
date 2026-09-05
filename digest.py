@@ -201,11 +201,16 @@ def main():
             now.hour == target_hour
             and now.minute == target_minute
             and now.date() != last_sent_date
+            and now.weekday() < 5
         ):
             try:
                 send_digest()
             except Exception as e:
                 print(f"[error] failed to send digest: {e}")
+                try:
+                    send_telegram_message(f"⚠️ Digest failed: {e}")
+                except Exception as e2:
+                    print(f"[error] failed to send failure alert: {e2}")
             last_sent_date = now.date()
         time.sleep(30)
 
