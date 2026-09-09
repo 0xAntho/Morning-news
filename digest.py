@@ -35,11 +35,13 @@ def get_price_change(ticker):
     """Return (last_close, pct_change_24h) or None if unavailable."""
     try:
         t = yf.Ticker(ticker)
-        hist = t.history(period="5d")
+        hist = t.history(period="5d").dropna(subset=["Close"])
         if len(hist) < 2:
             return None
         last_close = hist["Close"].iloc[-1]
         prev_close = hist["Close"].iloc[-2]
+        if prev_close == 0:
+            return None
         pct_change = (last_close - prev_close) / prev_close * 100
         return float(last_close), float(pct_change)
     except Exception as e:
@@ -50,6 +52,16 @@ def get_price_change(ticker):
 def _normalize_title(title):
     """Lowercase, strip punctuation/whitespace, for dedup comparison."""
     return re.sub(r"[^\w]+", "", title.lower())
+
+
+_QUOTE_PAGE_RE = re.compile(r"cours action .*cotation bourse", re.IGNORECASE)
+
+
+def _is_quote_page(title):
+    """Boursorama auto-generates a "TICKER Cours Action X, Cotation Bourse ..."
+    page per stock that gets re-indexed constantly, so it's always "fresh" but
+    isn't a news article — filter it out."""
+    return bool(_QUOTE_PAGE_RE.search(title))
 
 
 def get_news(query, count=2):
@@ -63,7 +75,8 @@ def get_news(query, count=2):
     headlines before truncating to `count`.
     """
     try:
-        rss_url = f"https://news.google.com/rss/search?q={quote(query)}&hl=fr&gl=FR&ceid=FR:fr"
+        dated_query = f"({query}) when:{int(NEWS_MAX_AGE_HOURS)}h"
+        rss_url = f"https://news.google.com/rss/search?q={quote(dated_query)}&hl=fr&gl=FR&ceid=FR:fr"
         feed = feedparser.parse(rss_url)
 
         now = time.time()
@@ -85,6 +98,9 @@ def get_news(query, count=2):
             source = e.source.get("title") if hasattr(e, "source") else None
             if source and title.endswith(f" - {source}"):
                 title = title[: -len(f" - {source}")]
+
+            if _is_quote_page(title):
+                continue
 
             key = _normalize_title(title)
             if key in seen:
@@ -137,7 +153,10 @@ def format_message(holdings):
         lines.append("")
 
     lines.append("<b>Actualites des marches</b>")
-    for n in get_news(GLOBAL_NEWS_QUERY, GLOBAL_NEWS_COUNT):
+    global_news = get_news(GLOBAL_NEWS_QUERY, GLOBAL_NEWS_COUNT)
+    if not global_news:
+        lines.append("ℹ️ pas d'actualite recente")
+    for n in global_news:
         lines.append(_format_news_line(n))
 
     return "\n".join(lines)
